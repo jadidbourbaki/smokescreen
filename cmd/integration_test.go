@@ -29,6 +29,7 @@ import (
 
 	"github.com/stripe/smokescreen/pkg/smokescreen"
 	acl "github.com/stripe/smokescreen/pkg/smokescreen/acl/v1"
+	"github.com/stripe/smokescreen/pkg/smokescreen/conntrack"
 	"github.com/stripe/smokescreen/pkg/smokescreen/metrics"
 )
 
@@ -811,4 +812,55 @@ func TestCRLEnforcement(t *testing.T) {
 		err := connectWithCert("testdata/pki/revoked-client.pem", "testdata/pki/revoked-client-key.pem")
 		assert.Error(t, err)
 	})
+}
+
+// TestIPRulePrecedenceIntegration exercises CLI configuration through HTTP
+// forwarding and CONNECT tunnels using only local destinations.
+func TestIPRulePrecedenceIntegration(t *testing.T) {
+	for _, useTLS := range []bool{false, true} {
+		target := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+		if useTLS {
+			target.StartTLS()
+		} else {
+			target.Start()
+		}
+		defer target.Close()
+		for _, tt := range []struct {
+			name, policy, allow, deny string
+			want                      int
+		}{
+			{"default allows overlap", "allow-first", "--allow-range=127.0.0.0/8", "--deny-address=127.0.0.1", http.StatusNoContent},
+			{"specific deny", "most-specific", "--allow-range=127.0.0.0/8", "--deny-address=127.0.0.1", http.StatusProxyAuthRequired},
+			{"specific allow", "most-specific", "--allow-address=127.0.0.1", "--deny-range=127.0.0.0/8", http.StatusNoContent},
+			{"deny wins tie", "most-specific", "--allow-address=127.0.0.1", "--deny-address=127.0.0.1", http.StatusProxyAuthRequired},
+		} {
+			t.Run(fmt.Sprintf("%s/TLS=%t", tt.name, useTLS), func(t *testing.T) {
+				config, err := NewConfiguration([]string{"smokescreen", "--ip-rule-precedence=" + tt.policy, tt.allow, tt.deny}, nil)
+				require.NoError(t, err)
+				config.MetricsClient = metrics.NewNoOpMetricsClient()
+				config.ConnTracker = conntrack.NewTracker(config.IdleTimeout, config.MetricsClient, config.Log, config.ShuttingDown, nil)
+				proxy := httptest.NewServer(smokescreen.BuildProxy(config))
+				defer proxy.Close()
+				proxyURL, err := url.Parse(proxy.URL)
+				require.NoError(t, err)
+				transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+				if useTLS {
+					roots := x509.NewCertPool()
+					roots.AddCert(target.Certificate())
+					transport.TLSClientConfig = &tls.Config{RootCAs: roots}
+				}
+				defer transport.CloseIdleConnections()
+				client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+				response, err := client.Get(target.URL)
+				if useTLS && tt.want == http.StatusProxyAuthRequired {
+					require.Error(t, err)
+					require.Contains(t, err.Error(), "Request rejected by proxy")
+					return
+				}
+				require.NoError(t, err)
+				defer response.Body.Close()
+				require.Equal(t, tt.want, response.StatusCode)
+			})
+		}
+	}
 }

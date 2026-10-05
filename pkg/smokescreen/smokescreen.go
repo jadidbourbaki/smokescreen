@@ -308,10 +308,44 @@ func addrIsLocalIp(config *Config, addr *net.TCPAddr) bool {
 	return false
 }
 
+// mostSpecificIPRule compares prefix length first, then port specificity.
+// Deny wins equal matches, independently of rule ordering.
+func mostSpecificIPRule(config *Config, addr *net.TCPAddr) (ipType, bool) {
+	bestPrefix, bestPort := -1, false
+	result := ipDenyUserConfigured
+	for _, rules := range []struct {
+		ranges []RuleRange
+		action ipType
+	}{{config.AllowRanges, ipAllowUserConfigured}, {config.DenyRanges, ipDenyUserConfigured}} {
+		for _, rule := range rules.ranges {
+			if (rule.Port != 0 && rule.Port != addr.Port) || !rule.Net.Contains(addr.IP) {
+				continue
+			}
+			prefix, bits := rule.Net.Mask.Size()
+			// Normalize mapped IPv4 prefixes so equivalent mapped and native rules tie.
+			if bits == 128 && rule.Net.IP.To4() != nil && prefix >= 96 {
+				prefix -= 96
+			}
+			port := rule.Port != 0
+			if prefix > bestPrefix || (prefix == bestPrefix && port && !bestPort) ||
+				(prefix == bestPrefix && port == bestPort && rules.action == ipDenyUserConfigured) {
+				bestPrefix, bestPort, result = prefix, port, rules.action
+			}
+		}
+	}
+	return result, bestPrefix >= 0
+}
+
 func classifyAddr(config *Config, addr *net.TCPAddr) ipType {
 
 	if !config.AllowSelfConnections && addrIsLocalIp(config, addr) {
 		return ipDenySelfConnection
+	}
+
+	if config.IPRulePrecedence == IPRulePrecedenceMostSpecific {
+		if result, matched := mostSpecificIPRule(config, addr); matched {
+			return result
+		}
 	}
 
 	if !addr.IP.IsGlobalUnicast() || addr.IP.IsLoopback() {

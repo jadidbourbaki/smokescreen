@@ -67,6 +67,11 @@ func NewConfiguration(args []string, logger *log.Logger) (*smokescreen.Config, e
 			Name:  "allow-self-connections",
 			Usage: "Allow connections to local interface addresses on all ports, subject to normal IP and ACL checks (default: false).",
 		},
+		&cli.StringFlag{
+			Name:  "ip-rule-precedence",
+			Value: string(smokescreen.IPRulePrecedenceAllowFirst),
+			Usage: "Resolve overlapping IP rules using allow-first or most-specific (deny wins ties).",
+		},
 		&cli.StringSliceFlag{
 			Name:  "deny-range",
 			Usage: "Add `RANGE`(in CIDR notation) to list of blocked IP ranges.  Repeatable.",
@@ -247,6 +252,12 @@ func NewConfiguration(args []string, logger *log.Logger) (*smokescreen.Config, e
 				return err
 			}
 			conf.StatsSocketFileMode = os.FileMode(filemode)
+		}
+
+		if c.IsSet("ip-rule-precedence") {
+			if err := conf.SetIPRulePrecedence(c.String("ip-rule-precedence")); err != nil {
+				return err
+			}
 		}
 
 		if c.IsSet("deny-range") {

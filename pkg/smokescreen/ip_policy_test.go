@@ -96,3 +96,28 @@ func TestMostSpecificIPPolicyRuleOrder(t *testing.T) {
 		require.Equal(t, ipAllowUserConfigured, mostSpecificIPPolicy{}.classify(c, &net.TCPAddr{IP: net.ParseIP("10.0.0.200"), Port: 443}))
 	}
 }
+
+func TestIPRulePrecedenceDefaultsAndSelfConnections(t *testing.T) {
+	c := NewConfig()
+	require.Equal(t, IPRulePrecedenceAllowFirst, c.IPRulePrecedence)
+	require.NoError(t, c.SetAllowRanges([]string{"10.0.0.0/24"}))
+	require.NoError(t, c.SetDenyAddresses([]string{"10.0.0.5"}))
+	addr := &net.TCPAddr{IP: net.ParseIP("10.0.0.5"), Port: 443}
+	for _, policy := range []IPRulePrecedence{"", IPRulePrecedenceAllowFirst, IPRulePrecedenceMostSpecific} {
+		c.IPRulePrecedence = policy
+		require.NoError(t, c.Validate())
+		want := ipAllowUserConfigured
+		if policy == IPRulePrecedenceMostSpecific {
+			want = ipDenyUserConfigured
+		}
+		c.LocalIPs = nil
+		c.AllowSelfConnections = false
+		require.Equal(t, want, classifyAddr(c, addr))
+		c.LocalIPs = []net.IP{addr.IP}
+		require.Equal(t, ipDenySelfConnection, classifyAddr(c, addr))
+		c.AllowSelfConnections = true
+		require.Equal(t, want, classifyAddr(c, addr))
+	}
+	c.IPRulePrecedence = "unknown"
+	require.Error(t, c.Validate())
+}

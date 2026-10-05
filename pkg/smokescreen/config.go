@@ -57,6 +57,36 @@ const (
 	DefaultMaxConcurrentConnectTunnels = 0   // 0 = unlimited
 )
 
+// IPRulePrecedence determines how overlapping explicit IP rules are resolved.
+// The zero value preserves allow-first behavior.
+type IPRulePrecedence string
+
+const (
+	IPRulePrecedenceAllowFirst   IPRulePrecedence = "allow-first"
+	IPRulePrecedenceMostSpecific IPRulePrecedence = "most-specific"
+)
+
+func (p IPRulePrecedence) validate() error {
+	switch p {
+	case "", IPRulePrecedenceAllowFirst, IPRulePrecedenceMostSpecific:
+		return nil
+	default:
+		return fmt.Errorf("invalid IP rule precedence %q: expected allow-first or most-specific", p)
+	}
+}
+
+func (config *Config) SetIPRulePrecedence(value string) error {
+	policy := IPRulePrecedence(value)
+	if value == "" {
+		return fmt.Errorf("IP rule precedence must be allow-first or most-specific")
+	}
+	if err := policy.validate(); err != nil {
+		return err
+	}
+	config.IPRulePrecedence = policy
+	return nil
+}
+
 type RuleRange struct {
 	Net  net.IPNet
 	Port int
@@ -73,6 +103,7 @@ type Config struct {
 	Ip                           string
 	Port                         uint16
 	Listener                     net.Listener
+	IPRulePrecedence             IPRulePrecedence
 	DenyRanges                   []RuleRange
 	AllowRanges                  []RuleRange
 	Resolver                     Resolver
@@ -401,6 +432,7 @@ func NewConfig() *Config {
 		revokedCertSerials:      make(map[string]map[string]bool),
 		clientCasBySubjectKeyId: make(map[string]*x509.Certificate),
 		Log:                     log.New(),
+		IPRulePrecedence:        IPRulePrecedenceAllowFirst,
 		Port:                    DefaultPort,
 		ConnectTimeout:          DefaultConnectTimeout,
 		ExitTimeout:             DefaultExitTimeout,
@@ -689,6 +721,9 @@ func (config *Config) SetupTls(certFile, keyFile string, clientCAFiles []string)
 }
 
 func (config *Config) Validate() error {
+	if err := config.IPRulePrecedence.validate(); err != nil {
+		return err
+	}
 	if config.RejectResponseHandler != nil && config.RejectResponseHandlerWithCtx != nil {
 		return errors.New("RejectResponseHandler and RejectResponseHandlerWithCtx cannot be used together")
 	}

@@ -186,3 +186,37 @@ default:
 	require.NotNil(t, conf)
 	require.NotNil(t, conf.EgressACL)
 }
+
+func TestNewConfigurationIPRulePrecedence(t *testing.T) {
+	for _, tt := range []struct {
+		name, yaml, flag, want string
+		invalid                bool
+	}{
+		{name: "default", want: "allow-first"},
+		{name: "YAML", yaml: "ip_rule_precedence: most-specific", want: "most-specific"},
+		{name: "CLI", flag: "most-specific", want: "most-specific"},
+		{name: "CLI override", yaml: "ip_rule_precedence: most-specific", flag: "allow-first", want: "allow-first"},
+		{name: "invalid YAML", yaml: "ip_rule_precedence: typo", invalid: true},
+		{name: "empty YAML", yaml: "ip_rule_precedence: ''", invalid: true},
+		{name: "invalid CLI", flag: "typo", invalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := []string{"smokescreen"}
+			if tt.yaml != "" {
+				path := filepath.Join(t.TempDir(), "config.yaml")
+				require.NoError(t, os.WriteFile(path, []byte(tt.yaml), 0600))
+				args = append(args, "--config-file="+path)
+			}
+			if tt.flag != "" {
+				args = append(args, "--ip-rule-precedence="+tt.flag)
+			}
+			config, err := NewConfiguration(args, nil)
+			if tt.invalid {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.want, string(config.IPRulePrecedence))
+			}
+		})
+	}
+}

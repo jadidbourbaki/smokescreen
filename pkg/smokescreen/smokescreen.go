@@ -312,6 +312,9 @@ func classifyAddr(config *Config, addr *net.TCPAddr) ipType {
 	if !config.AllowSelfConnections && addrIsLocalIp(config, addr) {
 		return ipDenySelfConnection
 	}
+	if config.IPRulePrecedence == IPRulePrecedenceMostSpecific {
+		return mostSpecificIPPolicy{}.classify(config, addr)
+	}
 	return allowFirstIPPolicy{}.classify(config, addr)
 }
 
